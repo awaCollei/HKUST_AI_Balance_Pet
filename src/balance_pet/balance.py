@@ -30,4 +30,4 @@ def parse_balance_body(body: bytes) -> Decimal:
 
 def format_balance(value: Decimal) -> str:
     """余额固定显示三位小数。"""
-    return f"{value:.3f}"
+    return f"{value:.6f}"

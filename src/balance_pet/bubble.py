@@ -10,6 +10,8 @@ from PySide6.QtWidgets import QWidget
 class BalanceBubble(QWidget):
     WIDTH = 190
     HEIGHT = 126
+    # 图片四周有透明留白，气泡尾部需要更深入宠物窗口，避免拉伸时看起来被裁住。
+    PET_OVERLAP = 30
 
     def __init__(self) -> None:
         super().__init__(None)

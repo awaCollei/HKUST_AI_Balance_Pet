@@ -223,10 +223,16 @@ class PetWindow(QWidget):
         pet_is_left = self.frameGeometry().center().x() < screen.availableGeometry().center().x()
         # 宠物在左边时气泡放右上方，小圆朝左；反之亦然。
         if pet_is_left:
-            position = QPoint(self.x() + self.width() - 18, self.y() - 42)
+            position = QPoint(
+                self.x() + self.width() - 18 - self._bubble.PET_OVERLAP,
+                self.y() - 42,
+            )
             points_left = True
         else:
-            position = QPoint(self.x() - self._bubble.width() + 18, self.y() - 42)
+            position = QPoint(
+                self.x() - self._bubble.width() + 18 + self._bubble.PET_OVERLAP,
+                self.y() - 42,
+            )
             points_left = False
         area = screen.availableGeometry()
         x = min(max(position.x(), area.left()), area.right() - self._bubble.width() + 1)
