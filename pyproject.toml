@@ -1,0 +1,24 @@
+[project]
+name = "balance-desktop-pet"
+version = "1.0.0"
+description = "点击即可查询 HKUST GenAI 余额的桌面宠物"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.10,<7",
+    "python-dotenv>=1.1,<2",
+]
+
+[project.scripts]
+balance-pet = "balance_pet.app:main"
+
+[dependency-groups]
+dev = ["pytest>=8.4,<10", "ruff>=0.14,<1"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
