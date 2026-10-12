@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     Qt,
     QUrl,
 )
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QMouseEvent, QPainter, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QImage, QMouseEvent, QPainter, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
@@ -29,6 +29,34 @@ BALANCE_URL = "https://hkust.azure-api.net/hkust-genai-auth/v1/balance"
 REQUEST_COOLDOWN_SECONDS = 5.0
 BASE_HEIGHT = 280
 DRAG_THRESHOLD = 5
+MAX_ANIMATION_SCALE_X = 1.13
+MAX_ANIMATION_SCALE_Y = 1.08
+# 判定“可见内容”的 alpha 阈值，用于忽略淡淡的抗锯齿/阴影像素。
+ALPHA_VISIBLE_THRESHOLD = 128
+
+
+def measure_transparent_margins(pixmap: QPixmap) -> tuple[int, int, int, int]:
+    """测量图片四周透明边缘（左、上、右、下），以源图像素计。"""
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    width, height = image.width(), image.height()
+    stride = image.bytesPerLine()
+    data = bytes(image.constBits())[: stride * height]
+    left, top, right, bottom = width, height, -1, -1
+    for y in range(height):
+        base = y * stride
+        for x in range(width):
+            if data[base + 4 * x + 3] > ALPHA_VISIBLE_THRESHOLD:
+                if x < left:
+                    left = x
+                if x > right:
+                    right = x
+                if y < top:
+                    top = y
+                if y > bottom:
+                    bottom = y
+    if right < 0:
+        return 0, 0, 0, 0
+    return left, top, width - 1 - right, height - 1 - bottom
 
 
 class PetWindow(QWidget):
@@ -37,6 +65,8 @@ class PetWindow(QWidget):
         self._source = QPixmap(str(image_path))
         if self._source.isNull():
             raise FileNotFoundError(f"无法读取宠物图片：{image_path}")
+
+        self._alpha_margins = measure_transparent_margins(self._source)
 
         self._settings = QSettings("BalancePet", "BalanceDesktopPet")
         self._size_scale = float(self._settings.value("size_scale", 1.0))
@@ -102,18 +132,33 @@ class PetWindow(QWidget):
             self.move(bottom_right - QPoint(width - 1, height - 1))
         self.update()
 
+    def _transparent_margins(self) -> tuple[int, int, int, int]:
+        """按当前显示尺寸换算图片透明边缘（左、上、右、下），随窗口缩放变化。"""
+        left, top, right, bottom = self._alpha_margins
+        sx = self.width() / self._source.width()
+        sy = self.height() / self._source.height()
+        if self._flipped:
+            left, right = right, left
+        return round(left * sx), round(top * sy), round(right * sx), round(bottom * sy)
+
+    def _clamp_to_screen(self, position: QPoint, screen) -> QPoint:
+        area = screen.availableGeometry()
+        left, top, right, _bottom = self._transparent_margins()
+        # 允许窗口越出屏幕，使图片中的可见内容（不含透明边缘）刚好贴到屏幕边缘。
+        x = min(max(position.x(), area.left() - left), area.right() - self.width() + 1 + right)
+        y = min(max(position.y(), area.top() - top), area.bottom() - self.height() + 1)
+        return QPoint(x, y)
+
     def _restore_position(self) -> None:
         saved = self._settings.value("position")
         if isinstance(saved, QPoint):
             screen = QApplication.screenAt(saved + QPoint(self.width() // 2, self.height() // 2))
             if screen is not None:
-                area = screen.availableGeometry()
-                x = min(max(saved.x(), area.left()), area.right() - self.width() + 1)
-                y = min(max(saved.y(), area.top()), area.bottom() - self.height() + 1)
-                self.move(x, y)
+                self.move(self._clamp_to_screen(saved, screen))
                 return
-        area = QApplication.primaryScreen().availableGeometry()
-        self.move(area.right() - self.width() - 24, area.bottom() - self.height() - 24)
+        screen = QApplication.primaryScreen()
+        self.move(self._clamp_to_screen(QPoint(screen.availableGeometry().right() - self.width() - 24,
+                                                screen.availableGeometry().bottom() - self.height() - 24), screen))
 
     def get_scale_x(self) -> float:
         return self._scale_x
@@ -184,9 +229,7 @@ class PetWindow(QWidget):
     def _keep_on_screen(self) -> None:
         screen = QApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
         area = screen.availableGeometry()
-        x = min(max(self.x(), area.left()), area.right() - self.width() + 1)
-        y = min(max(self.y(), area.top()), area.bottom() - self.height() + 1)
-        self.move(x, y)
+        self.move(self._clamp_to_screen(self.pos(), screen))
         self._settings.setValue("position", self.pos())
         self._update_flip()
 
