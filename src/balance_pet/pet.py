@@ -30,7 +30,7 @@ BALANCE_URL = "https://hkust.azure-api.net/hkust-genai-auth/v1/balance"
 REQUEST_COOLDOWN_SECONDS = 5.0
 BASE_HEIGHT = 280
 # 宠物帧动画播放帧率（帧/秒）。
-FRAME_RATE = 12
+FRAME_RATE = 24
 FRAME_INTERVAL_MS = round(1000 / FRAME_RATE)
 DRAG_THRESHOLD = 5
 MAX_ANIMATION_SCALE_X = 1.13
@@ -143,9 +143,9 @@ class PetWindow(QWidget):
         self._frames = load_frames(image_dir)
         if not self._frames:
             raise FileNotFoundError(f"未在目录中找到宠物帧图片（1.png、2.png…）：{image_dir}")
-        self._static_source = QPixmap(str(image_dir.parent / "pet.png"))
+        self._static_source = QPixmap(str(image_dir.parent / "pet/1.png"))
         if self._static_source.isNull():
-            raise FileNotFoundError(f"未找到静态宠物图片：{image_dir.parent / 'pet.png'}")
+            raise FileNotFoundError(f"未找到静态宠物图片：{image_dir.parent / 'pet/1.png'}")
 
         self._base_width = self._frames[0].width()
         self._base_height = self._frames[0].height()
@@ -242,7 +242,7 @@ class PetWindow(QWidget):
         self.update()
 
     def _advance_frame(self) -> None:
-        """按固定帧率正放至末帧后倒放回首帧，折返时不重复播放首尾帧。"""
+        """按固定帧率正放至末帧后倒放回首帧，折返时会重复播放首帧。"""
         count = len(self._frames)
         index = self._frame_index + self._frame_direction
         if index >= count:
@@ -250,7 +250,7 @@ class PetWindow(QWidget):
             index = count - 2
         elif index < 0:
             self._frame_direction = 1
-            index = 1
+            index = 0
         self._frame_index = index
         self._source = self._frames[self._frame_index]
         self._alpha_margins = self._frame_margins[self._frame_index]
