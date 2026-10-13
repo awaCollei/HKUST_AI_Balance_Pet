@@ -16,6 +16,7 @@ from PySide6.QtCore import (
     QSequentialAnimationGroup,
     QSettings,
     Qt,
+    QTimer,
     QUrl,
 )
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QImage, QMouseEvent, QPainter, QPixmap
@@ -28,6 +29,9 @@ from .bubble import BalanceBubble
 BALANCE_URL = "https://hkust.azure-api.net/hkust-genai-auth/v1/balance"
 REQUEST_COOLDOWN_SECONDS = 5.0
 BASE_HEIGHT = 280
+# 宠物帧动画播放帧率（帧/秒）。
+FRAME_RATE = 12
+FRAME_INTERVAL_MS = round(1000 / FRAME_RATE)
 DRAG_THRESHOLD = 5
 MAX_ANIMATION_SCALE_X = 1.13
 MAX_ANIMATION_SCALE_Y = 1.08
@@ -59,14 +63,40 @@ def measure_transparent_margins(pixmap: QPixmap) -> tuple[int, int, int, int]:
     return left, top, width - 1 - right, height - 1 - bottom
 
 
-class PetWindow(QWidget):
-    def __init__(self, image_path: Path) -> None:
-        super().__init__(None)
-        self._source = QPixmap(str(image_path))
-        if self._source.isNull():
-            raise FileNotFoundError(f"无法读取宠物图片：{image_path}")
+def load_frames(image_dir: Path) -> list[QPixmap]:
+    """按 1.png、2.png… 的数字顺序加载目录下的帧图片。"""
+    paths = sorted(
+        (path for path in image_dir.glob("*.png") if path.stem.isdigit()),
+        key=lambda path: int(path.stem),
+    )
+    frames: list[QPixmap] = []
+    for path in paths:
+        pixmap = QPixmap(str(path))
+        if not pixmap.isNull():
+            frames.append(pixmap)
+    return frames
 
-        self._alpha_margins = measure_transparent_margins(self._source)
+
+class PetWindow(QWidget):
+    def __init__(self, image_dir: Path) -> None:
+        super().__init__(None)
+        self._frames = load_frames(image_dir)
+        if not self._frames:
+            raise FileNotFoundError(f"未在目录中找到宠物帧图片（1.png、2.png…）：{image_dir}")
+
+        self._base_width = self._frames[0].width()
+        self._base_height = self._frames[0].height()
+        self._frame_margins = [measure_transparent_margins(frame) for frame in self._frames]
+        self._frame_index = 0
+        self._frame_direction = 1
+        self._source = self._frames[0]
+        self._alpha_margins = self._frame_margins[0]
+
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(FRAME_INTERVAL_MS)
+        self._frame_timer.timeout.connect(self._advance_frame)
+        if len(self._frames) > 1:
+            self._frame_timer.start()
 
         self._settings = QSettings("BalancePet", "BalanceDesktopPet")
         self._size_scale = float(self._settings.value("size_scale", 1.0))
@@ -125,18 +155,33 @@ class PetWindow(QWidget):
 
     def _apply_size(self) -> None:
         height = round(BASE_HEIGHT * self._size_scale)
-        width = round(height * self._source.width() / self._source.height())
+        width = round(height * self._base_width / self._base_height)
         bottom_right = self.geometry().bottomRight()
         self.setFixedSize(width, height)
         if not bottom_right.isNull():
             self.move(bottom_right - QPoint(width - 1, height - 1))
         self.update()
 
+    def _advance_frame(self) -> None:
+        """按固定帧率正放至末帧后倒放回首帧，折返时不重复播放首尾帧。"""
+        count = len(self._frames)
+        index = self._frame_index + self._frame_direction
+        if index >= count:
+            self._frame_direction = -1
+            index = count - 2
+        elif index < 0:
+            self._frame_direction = 1
+            index = 1
+        self._frame_index = index
+        self._source = self._frames[self._frame_index]
+        self._alpha_margins = self._frame_margins[self._frame_index]
+        self.update()
+
     def _transparent_margins(self) -> tuple[int, int, int, int]:
         """按当前显示尺寸换算图片透明边缘（左、上、右、下），随窗口缩放变化。"""
         left, top, right, bottom = self._alpha_margins
-        sx = self.width() / self._source.width()
-        sy = self.height() / self._source.height()
+        sx = self.width() / self._base_width
+        sy = self.height() / self._base_height
         if self._flipped:
             left, right = right, left
         return round(left * sx), round(top * sy), round(right * sx), round(bottom * sy)

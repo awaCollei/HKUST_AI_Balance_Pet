@@ -1,0 +1,126 @@
+import cv2
+import numpy as np
+import os
+import subprocess
+import argparse
+from PIL import Image
+
+
+def probe_video(path):
+    """用 ffprobe 拿分辨率、帧率"""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate",
+        "-of", "default=noprint_wrappers=1", path
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
+    vals = dict(line.split("=") for line in out.strip().splitlines())
+    w, h = int(vals["width"]), int(vals["height"])
+    num, den = vals["r_frame_rate"].split("/")
+    fps = float(num) / float(den)
+    return w, h, fps
+
+
+def read_frames_ffmpeg(path):
+    """用 ffmpeg 管道读出所有帧为 RGBA numpy 数组"""
+    w, h, fps = probe_video(path)
+    cmd = [
+        "ffmpeg", "-v", "error",
+        "-i", path,
+        "-f", "rawvideo",
+        "-pix_fmt", "rgba",   # 强制 RGBA
+        "-"
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, bufsize=10**8)
+    frame_size = w * h * 4
+    frames = []
+    while True:
+        buf = proc.stdout.read(frame_size)
+        if len(buf) < frame_size:
+            break
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
+        frames.append(arr.copy())
+    proc.stdout.close()
+    proc.wait()
+    if proc.returncode != 0:
+        err = proc.stderr.read().decode(errors="ignore")
+        raise RuntimeError(f"ffmpeg 读取失败:\n{err}")
+    return frames, fps
+
+
+def find_content_bbox(frames, alpha_threshold=10):
+    x_min = y_min = None
+    x_max = y_max = 0
+    for i, frame in enumerate(frames):
+        alpha = frame[:, :, 3]
+        mask = alpha > alpha_threshold
+        if not mask.any():
+            continue
+        ys, xs = np.where(mask)
+        fx_min, fx_max = xs.min(), xs.max()
+        fy_min, fy_max = ys.min(), ys.max()
+        x_min = fx_min if x_min is None else min(x_min, fx_min)
+        y_min = fy_min if y_min is None else min(y_min, fy_min)
+        x_max = max(x_max, fx_max)
+        y_max = max(y_max, fy_max)
+    if x_min is None:
+        raise RuntimeError("所有帧都是全透明")
+    return (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("-i", "--input", default="output_prores4444.mov")
+    ap.add_argument("-o", "--output", default="frames_out")
+    ap.add_argument("--alpha-threshold", type=int, default=10)
+    ap.add_argument("--target-w", type=int, default=540)
+    ap.add_argument("--target-h", type=int, default=757)
+    ap.add_argument("--pad-left", type=int, default=45)
+    ap.add_argument("--pad-right", type=int, default=45)
+    ap.add_argument("--pad-top", type=int, default=65)
+    ap.add_argument("--pad-bottom", type=int, default=0)
+    args = ap.parse_args()
+
+    os.makedirs(args.output, exist_ok=True)
+
+    # 1. 用 ffmpeg 管道读 RGBA
+    print(f"读取视频: {args.input}")
+    frames, fps = read_frames_ffmpeg(args.input)
+    print(f"共 {len(frames)} 帧, 帧率 {fps:.2f}")
+
+    # 快速验证 alpha 是否存在
+    a0 = frames[0][:, :, 3]
+    print(f"第 1 帧 alpha: min={a0.min()}, max={a0.max()}, "
+          f"全透明像素占比={(a0 < 10).mean():.2%}")
+
+    # 2. 统一边界
+    print("计算内容边界...")
+    x, y, w, h = find_content_bbox(frames, args.alpha_threshold)
+    print(f"内容边界: x={x}, y={y}, w={w}, h={h}")
+
+    # 3. 逐帧处理
+    final_w = args.target_w + args.pad_left + args.pad_right
+    final_h = args.target_h + args.pad_top + args.pad_bottom
+    print(f"输出尺寸: {final_w}x{final_h}")
+
+    for i, frame in enumerate(frames, start=1):
+        cropped = frame[y:y + h, x:x + w]           # RGBA
+        resized = cv2.resize(cropped, (args.target_w, args.target_h),
+                             interpolation=cv2.INTER_LANCZOS4)
+        # 已经是 RGBA，直接给 PIL
+        pil_img = Image.fromarray(resized, mode="RGBA")
+
+        canvas = Image.new("RGBA", (final_w, final_h), (0, 0, 0, 0))
+        canvas.paste(pil_img, (args.pad_left, args.pad_top), pil_img)
+
+        out_path = os.path.join(args.output, f"{i}.png")
+        canvas.save(out_path, "PNG", compress_level=9, optimize=True)
+        if i % 10 == 0 or i == len(frames):
+            print(f"  已输出 {i}/{len(frames)}")
+
+    print(f"\n完成！{len(frames)} 帧 -> {args.output}/")
+
+
+if __name__ == "__main__":
+    main()

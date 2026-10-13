@@ -31,7 +31,7 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)
 
     try:
-        pet = PetWindow(root / "pet.png")
+        pet = PetWindow(root / "pet")
     except FileNotFoundError as exc:
         QMessageBox.critical(None, "启动失败", str(exc))
         return 1
