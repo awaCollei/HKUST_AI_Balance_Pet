@@ -83,10 +83,14 @@ class PetWindow(QWidget):
         self._frames = load_frames(image_dir)
         if not self._frames:
             raise FileNotFoundError(f"未在目录中找到宠物帧图片（1.png、2.png…）：{image_dir}")
+        self._static_source = QPixmap(str(image_dir.parent / "pet.png"))
+        if self._static_source.isNull():
+            raise FileNotFoundError(f"未找到静态宠物图片：{image_dir.parent / 'pet.png'}")
 
         self._base_width = self._frames[0].width()
         self._base_height = self._frames[0].height()
         self._frame_margins = [measure_transparent_margins(frame) for frame in self._frames]
+        self._static_margins = measure_transparent_margins(self._static_source)
         self._frame_index = 0
         self._frame_direction = 1
         self._source = self._frames[0]
@@ -95,10 +99,14 @@ class PetWindow(QWidget):
         self._frame_timer = QTimer(self)
         self._frame_timer.setInterval(FRAME_INTERVAL_MS)
         self._frame_timer.timeout.connect(self._advance_frame)
-        if len(self._frames) > 1:
-            self._frame_timer.start()
 
         self._settings = QSettings("BalancePet", "BalanceDesktopPet")
+        self._dynamic = self._settings.value("dynamic", True, type=bool)
+        if self._dynamic and len(self._frames) > 1:
+            self._frame_timer.start()
+        elif not self._dynamic:
+            self._source = self._static_source
+            self._alpha_margins = self._static_margins
         self._size_scale = float(self._settings.value("size_scale", 1.0))
         self._scale_x = 1.0
         self._scale_y = 1.0
@@ -175,6 +183,20 @@ class PetWindow(QWidget):
         self._frame_index = index
         self._source = self._frames[self._frame_index]
         self._alpha_margins = self._frame_margins[self._frame_index]
+        self.update()
+
+    def _set_dynamic(self, enabled: bool) -> None:
+        self._dynamic = enabled
+        self._settings.setValue("dynamic", enabled)
+        if enabled:
+            self._source = self._frames[self._frame_index]
+            self._alpha_margins = self._frame_margins[self._frame_index]
+            if len(self._frames) > 1:
+                self._frame_timer.start()
+        else:
+            self._frame_timer.stop()
+            self._source = self._static_source
+            self._alpha_margins = self._static_margins
         self.update()
 
     def _transparent_margins(self) -> tuple[int, int, int, int]:
@@ -383,6 +405,11 @@ class PetWindow(QWidget):
 
     def _show_context_menu(self, global_position: QPoint) -> None:
         menu = QMenu(self)
+        dynamic_action = menu.addAction("动态")
+        dynamic_action.setCheckable(True)
+        dynamic_action.setChecked(self._dynamic)
+        dynamic_action.triggered.connect(self._set_dynamic)
+        menu.addSeparator()
         size_menu = menu.addMenu("调整大小")
         size_group = QActionGroup(size_menu)
         size_group.setExclusive(True)
