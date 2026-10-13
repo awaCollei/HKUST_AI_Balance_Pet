@@ -38,6 +38,66 @@ MAX_ANIMATION_SCALE_Y = 1.08
 # 判定“可见内容”的 alpha 阈值，用于忽略淡淡的抗锯齿/阴影像素。
 ALPHA_VISIBLE_THRESHOLD = 128
 
+LANGUAGE_NAMES = {
+    "zh_CN": "简体中文",
+    "zh_TW": "繁體中文",
+    "en": "English",
+}
+
+TRANSLATIONS = {
+    "zh_CN": {
+        "language": "语言",
+        "dynamic": "动态",
+        "resize": "调整大小",
+        "to_tray": "收到托盘",
+        "show_pet": "显示宠物",
+        "exit": "退出",
+        "tray_tooltip": "余额桌面宠物",
+        "tray_message_title": "余额桌面宠物",
+        "tray_message": "宠物已收到托盘，单击托盘图标可恢复。",
+        "balance": "余额",
+        "querying": "查询中…",
+        "missing_token": "未配置密钥",
+        "request_failed": "请求失败",
+        "network_error": "网络错误",
+        "format_error": "响应格式错误",
+    },
+    "zh_TW": {
+        "language": "語言",
+        "dynamic": "動態",
+        "resize": "調整大小",
+        "to_tray": "收到系統匣",
+        "show_pet": "顯示寵物",
+        "exit": "退出",
+        "tray_tooltip": "餘額桌面寵物",
+        "tray_message_title": "餘額桌面寵物",
+        "tray_message": "寵物已收到系統匣，單擊系統匣圖示即可恢復。",
+        "balance": "餘額",
+        "querying": "查詢中…",
+        "missing_token": "未設定金鑰",
+        "request_failed": "請求失敗",
+        "network_error": "網路錯誤",
+        "format_error": "回應格式錯誤",
+    },
+    "en": {
+        "language": "Language",
+        "dynamic": "Animation",
+        "resize": "Resize",
+        "to_tray": "Minimize to tray",
+        "show_pet": "Show pet",
+        "exit": "Exit",
+        "tray_tooltip": "Balance Desktop Pet",
+        "tray_message_title": "Balance Desktop Pet",
+        "tray_message": "The pet was minimized to the tray. Click the tray icon to restore it.",
+        "balance": "Credit",
+        "querying": "Checking…",
+        "missing_token": "Token is not configured",
+        "request_failed": "Request failed",
+        "network_error": "Network error",
+        "format_error": "Invalid response format",
+    },
+}
+
 
 def measure_transparent_margins(pixmap: QPixmap) -> tuple[int, int, int, int]:
     """测量图片四周透明边缘（左、上、右、下），以源图像素计。"""
@@ -101,6 +161,9 @@ class PetWindow(QWidget):
         self._frame_timer.timeout.connect(self._advance_frame)
 
         self._settings = QSettings("BalancePet", "BalanceDesktopPet")
+        self._language = self._settings.value("language", "zh_CN")
+        if self._language not in TRANSLATIONS:
+            self._language = "zh_CN"
         self._dynamic = self._settings.value("dynamic", True, type=bool)
         if self._dynamic and len(self._frames) > 1:
             self._frame_timer.start()
@@ -133,21 +196,29 @@ class PetWindow(QWidget):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._apply_size()
         self._create_tray()
+        self._tray.activated.connect(self._tray_activated)
         self._restore_position()
         self._update_flip()
+
+    def _text(self, key: str) -> str:
+        return TRANSLATIONS[self._language][key]
 
     def _create_tray(self) -> None:
         icon = QIcon(self._source)
         self.setWindowIcon(icon)
         self._tray.setIcon(icon)
-        self._tray.setToolTip("余额桌面宠物")
+        self._tray.setToolTip(self._text("tray_tooltip"))
         menu = QMenu()
-        menu.addAction("显示宠物").triggered.connect(self.restore_from_tray)
+        menu.addAction(self._text("show_pet")).triggered.connect(self.restore_from_tray)
         menu.addSeparator()
-        menu.addAction("退出").triggered.connect(QApplication.instance().quit)
+        menu.addAction(self._text("exit")).triggered.connect(QApplication.instance().quit)
         self._tray.setContextMenu(menu)
-        self._tray.activated.connect(self._tray_activated)
         self._tray.show()
+
+    def _set_language(self, language: str) -> None:
+        self._language = language
+        self._settings.setValue("language", language)
+        self._create_tray()
 
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (
@@ -366,18 +437,18 @@ class PetWindow(QWidget):
         now = time.monotonic()
         if now - self._last_request_at < REQUEST_COOLDOWN_SECONDS:
             if self._last_balance is not None:
-                self._show_bubble(f"余额\n{self._last_balance}")
+                self._show_bubble(f"{self._text('balance')}\n{self._last_balance}")
             else:
-                self._show_bubble("余额\n查询中…")
+                self._show_bubble(f"{self._text('balance')}\n{self._text('querying')}")
             return
 
         token = os.getenv("HKUST_BEARER_TOKEN", "").strip()
         if not token:
-            self._show_bubble("余额\n未配置密钥")
+            self._show_bubble(f"{self._text('balance')}\n{self._text('missing_token')}")
             return
 
         self._last_request_at = now
-        self._show_bubble("余额\n查询中…")
+        self._show_bubble(f"{self._text('balance')}\n{self._text('querying')}")
         request = QNetworkRequest(QUrl(BALANCE_URL))
         request.setRawHeader(b"Authorization", f"Bearer {token}".encode())
         request.setRawHeader(b"Accept", b"text/plain")
@@ -391,13 +462,14 @@ class PetWindow(QWidget):
             status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
             raw = bytes(reply.readAll())
             if reply.error() != QNetworkReply.NetworkError.NoError:
-                message = f"请求失败\nHTTP {status}" if status else "请求失败\n网络错误"
+                message = (f"{self._text('request_failed')}\nHTTP {status}"
+                           if status else f"{self._text('request_failed')}\n{self._text('network_error')}")
                 self._show_bubble(message)
                 return
             self._last_balance = format_balance(parse_balance_body(raw))
-            self._show_bubble(f"余额\n{self._last_balance}")
+            self._show_bubble(f"{self._text('balance')}\n{self._last_balance}")
         except BalanceResponseError:
-            self._show_bubble("余额\n响应格式错误")
+            self._show_bubble(f"{self._text('balance')}\n{self._text('format_error')}")
         finally:
             if self._active_reply is reply:
                 self._active_reply = None
@@ -405,12 +477,22 @@ class PetWindow(QWidget):
 
     def _show_context_menu(self, global_position: QPoint) -> None:
         menu = QMenu(self)
-        dynamic_action = menu.addAction("动态")
+        dynamic_action = menu.addAction(self._text("dynamic"))
         dynamic_action.setCheckable(True)
         dynamic_action.setChecked(self._dynamic)
         dynamic_action.triggered.connect(self._set_dynamic)
         menu.addSeparator()
-        size_menu = menu.addMenu("调整大小")
+        language_menu = menu.addMenu(self._text("language"))
+        language_group = QActionGroup(language_menu)
+        language_group.setExclusive(True)
+        for language, label in LANGUAGE_NAMES.items():
+            action = QAction(label, language_menu, checkable=True)
+            action.setChecked(self._language == language)
+            action.triggered.connect(lambda checked=False, value=language: self._set_language(value))
+            language_group.addAction(action)
+            language_menu.addAction(action)
+        menu.addSeparator()
+        size_menu = menu.addMenu(self._text("resize"))
         size_group = QActionGroup(size_menu)
         size_group.setExclusive(True)
         for label, scale in (("50%", 0.5), ("75%", 0.75), ("100%", 1.0), ("125%", 1.25), ("150%", 1.5)):
@@ -420,9 +502,9 @@ class PetWindow(QWidget):
             size_group.addAction(action)
             size_menu.addAction(action)
         menu.addSeparator()
-        menu.addAction("收到托盘").triggered.connect(self._hide_to_tray)
+        menu.addAction(self._text("to_tray")).triggered.connect(self._hide_to_tray)
         menu.addSeparator()
-        menu.addAction("退出").triggered.connect(QApplication.instance().quit)
+        menu.addAction(self._text("exit")).triggered.connect(QApplication.instance().quit)
         menu.exec(global_position)
 
     def _set_size(self, scale: float) -> None:
@@ -434,7 +516,7 @@ class PetWindow(QWidget):
     def _hide_to_tray(self) -> None:
         self._bubble.hide()
         self.hide()
-        self._tray.showMessage("余额桌面宠物", "宠物已收到托盘，单击托盘图标可恢复。")
+        self._tray.showMessage(self._text("tray_message_title"), self._text("tray_message"))
 
     def closeEvent(self, event) -> None:
         self._settings.setValue("position", self.pos())
